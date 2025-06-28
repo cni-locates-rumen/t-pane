@@ -367,7 +367,7 @@ async function executeInPane(paneId: string, command: string, captureOutput: boo
       
       // If prompt detection fails, fall back to marker method
       // Re-run command with markers
-      const markedCommand = `echo '===CMD_${commandId}_START==='; ${command}; echo '===CMD_${commandId}_END==='`;
+      const markedCommand = `echo "===CMD_${commandId}_START==="; ${command}; echo "===CMD_${commandId}_END==="`;
       await execAsync(`tmux send-keys -t ${paneId} ${JSON.stringify(markedCommand)} Enter`);
       await new Promise(resolve => setTimeout(resolve, 2000));
       
