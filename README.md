@@ -219,3 +219,13 @@ This feature is experimental and requires manual Claude invocation in the create
 - [ ] Support for multiple concurrent commands
 - [ ] Progress indicators for long-running commands
 - [ ] Integration with `/resume` for session continuity
+
+### 8. Read File
+Read file contents using cat/head commands in the tmux pane.
+
+
+
+### 9. Edit File
+Edit files using sed in the tmux pane (visible to user).
+
+

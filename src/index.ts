@@ -86,6 +86,17 @@ const launchBackgroundTaskSchema = z.object({
   timeout: z.number().optional().default(300000).describe("Maximum time in milliseconds (default: 5 minutes)")
 });
 
+const readFileSchema = z.object({
+  filePath: z.string().describe("Path to the file to read"),
+  lines: z.number().optional().describe("Number of lines to show (default: all)")
+});
+
+const editFileSchema = z.object({
+  filePath: z.string().describe("Path to the file to edit"),
+  search: z.string().describe("Text to search for"),
+  replace: z.string().describe("Text to replace with")
+});
+
 // Server setup
 const server = new Server(
   {
@@ -603,6 +614,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: "object",
         properties: {}
       }
+    },
+    {
+      name: "read_file",
+      description: "Read a file using cat/head/tail commands in tmux pane",
+      inputSchema: {
+        type: "object",
+        properties: {
+          filePath: { type: "string", description: "Path to the file to read" },
+          lines: { type: "number", description: "Number of lines to show (default: all)" }
+        },
+        required: ["filePath"]
+      }
+    },
+    {
+      name: "edit_file",
+      description: "Edit a file using sed in tmux pane (visible to user)",
+      inputSchema: {
+        type: "object",
+        properties: {
+          filePath: { type: "string", description: "Path to the file to edit" },
+          search: { type: "string", description: "Text to search for" },
+          replace: { type: "string", description: "Text to replace with" }
+        },
+        required: ["filePath", "search", "replace"]
+      }
     }
   ],
 }));
@@ -817,6 +853,63 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: tasks.length > 0 
                 ? `Background Tasks:\n\n${taskSummary}`
                 : "No background tasks found."
+            }
+          ]
+        };
+      }
+      
+      case "read_file": {
+        const { filePath, lines } = readFileSchema.parse(args);
+        
+        // Find or create the pane
+        const paneId = await findOrCreatePane();
+        
+        // Build the command
+        let command: string;
+        if (lines && lines > 0) {
+          command = `head -n ${lines} ${filePath}`;
+        } else {
+          command = `cat ${filePath}`;
+        }
+        
+        // Execute the command
+        const result = await executeInPane(paneId, command, true);
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `File: ${filePath}\n\n${result.output}`
+            }
+          ]
+        };
+      }
+      
+      case "edit_file": {
+        const { filePath, search, replace } = editFileSchema.parse(args);
+        
+        // Find or create the pane
+        const paneId = await findOrCreatePane();
+        
+        // First, show the change that will be made
+        const grepCommand = `grep -n "${search}" ${filePath} | head -5`;
+        await executeInPane(paneId, grepCommand, true);
+        
+        // Build the sed command (using -i for in-place edit)
+        const sedCommand = `sed -i '' 's/${search.replace(/[[\.^$()|*+?{]/g, '\\$&')}/${replace.replace(/[[\.^$()|*+?{]/g, '\\$&')}/g' ${filePath}`;
+        
+        // Execute the edit
+        const result = await executeInPane(paneId, sedCommand, true);
+        
+        // Show confirmation
+        const confirmCommand = `echo "File edited: ${filePath}"`;
+        await executeInPane(paneId, confirmCommand, true);
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Edited ${filePath}:\nReplaced "${search}" with "${replace}"`
             }
           ]
         };
