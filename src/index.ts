@@ -322,9 +322,18 @@ async function findOrCreatePane(requestedPaneName?: string): Promise<string> {
   const currentDir = getCurrentDirectory();
   const paneName = requestedPaneName || getPaneName(currentDir);
   
+  // Get current pane to exclude it
+  let currentPaneId = '';
+  try {
+    const { stdout } = await execAsync("tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}'");
+    currentPaneId = stdout.trim();
+  } catch (error) {
+    // Ignore error
+  }
+  
   // Check if we already have a pane ID stored for this directory
   const storedPaneId = paneIdsByDirectory.get(currentDir);
-  if (storedPaneId) {
+  if (storedPaneId && storedPaneId !== currentPaneId) {
     try {
       // Check if the pane still exists
       const { stdout } = await execAsync(`tmux list-panes -F '#{session_name}:#{window_index}.#{pane_index}' | grep -F '${storedPaneId}'`);
@@ -360,29 +369,24 @@ async function findOrCreatePane(requestedPaneName?: string): Promise<string> {
     // No existing pane found
   }
   
-  // Create new pane as a split
+  // Create new pane in a new window to avoid conflicts
   try {
-    // Get current pane info
-    const { stdout: currentPane } = await execAsync("tmux display-message -p '#{pane_id}'");
-    const originalPaneId = currentPane.trim();
+    // Create a new window with the pane name
+    await execAsync(`tmux new-window -n "${paneName}" -c "${currentDir}"`);
     
-    // Create a horizontal split (60/40) to the right of current pane
-    await execAsync(`tmux split-window -h -p 40 -c "#{pane_current_path}"`);
+    // Get the new pane's address
+    const { stdout: newPaneInfo } = await execAsync(`tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}'`);
+    const newPaneId = newPaneInfo.trim();
     
     // Mark this pane for this specific directory
     const envVarName = `CLAUDE_DIR_${getDirectoryHash(currentDir)}`;
     await execAsync(`tmux set-environment ${envVarName} 1`);
     
-    // Get the new pane's address
-    const { stdout: newPaneInfo } = await execAsync(`tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}'`);
-    const newPaneId = newPaneInfo.trim();
+    // Store the pane ID
     paneIdsByDirectory.set(currentDir, newPaneId);
     
-    // Set a custom pane border format to identify it
-    await execAsync(`tmux select-pane -T "${paneName}"`);
-    
-    // Return to the original pane
-    await execAsync(`tmux select-pane -t '${originalPaneId}'`);
+    // Switch back to the original window
+    await execAsync(`tmux last-window`);
     
     return newPaneId;
   } catch (error) {
