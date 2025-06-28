@@ -11,6 +11,7 @@ An MCP (Model Context Protocol) server that enables Claude to execute commands i
 - **Session Persistence**: Commands remain visible in tmux for user interaction
 - **Interactive Prompt Detection**: Automatically detects when commands require user input (passwords, confirmations, etc.)
 - **Directory-Specific Logging**: Commands are logged to `.t-pane/logs/` in the current directory
+- **Background Tasks**: Launch Claude instances in background panes for research/analysis tasks
 
 ## Installation
 
@@ -86,6 +87,24 @@ send_keys({
   pane: "claude-terminal",  // optional, defaults to directory-specific pane
   enter: false             // optional, set to true to also send Enter
 })
+```
+
+### 6. Launch Background Task
+Create a background pane for running Claude with a specific research/analysis task.
+
+```typescript
+launch_background_task({
+  task: "Research TypeScript 5.x features and create a summary",
+  outputFile: "typescript-features.md",  // saved to .t-pane/tasks/
+  timeout: 300000                       // optional, default 5 minutes
+})
+```
+
+### 7. Check Background Tasks
+Check the status of all background tasks.
+
+```typescript
+check_background_tasks()
 ```
 
 ## How It Works
@@ -180,10 +199,23 @@ To disable logging:
 export T_PANE_DISABLE_LOGGING=true
 ```
 
+## Background Tasks (Experimental)
+
+The t-pane server can launch Claude instances in background panes for research or analysis:
+
+1. **Launch a task**: Creates a new pane with task instructions
+2. **Manual execution**: Switch to the pane and run `claude` to start the task
+3. **Output location**: Results are saved to `.t-pane/tasks/`
+4. **Status tracking**: Use `check_background_tasks()` to monitor progress
+
+This feature is experimental and requires manual Claude invocation in the created pane.
+
 ## Future Enhancements
 
 - [x] Interactive prompt detection
 - [x] Command logging
+- [x] Background task execution (experimental)
+- [ ] Automatic Claude invocation for background tasks
 - [ ] Support for multiple concurrent commands
 - [ ] Progress indicators for long-running commands
 - [ ] Integration with `/resume` for session continuity

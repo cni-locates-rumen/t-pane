@@ -47,6 +47,16 @@ interface LogEntry {
   interactionType?: string;
 }
 
+interface BackgroundTask {
+  id: string;
+  task: string;
+  outputFile: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  startTime: string;
+  endTime?: string;
+  paneId?: string;
+}
+
 // Schemas
 const executeCommandSchema = z.object({
   command: z.string().describe("The command to execute in the tmux pane"),
@@ -70,11 +80,17 @@ const sendKeysSchema = z.object({
   enter: z.boolean().optional().default(false).describe("Whether to send Enter after the text")
 });
 
+const launchBackgroundTaskSchema = z.object({
+  task: z.string().describe("The task description for Claude to execute"),
+  outputFile: z.string().describe("Filename for the output (will be saved in .t-pane/tasks/)"),
+  timeout: z.number().optional().default(300000).describe("Maximum time in milliseconds (default: 5 minutes)")
+});
+
 // Server setup
 const server = new Server(
   {
     name: "t-pane",
-    version: "0.3.0",
+    version: "0.4.0",
   },
   {
     capabilities: {
@@ -212,6 +228,65 @@ function checkForPrompt(output: string): { requiresInteraction: boolean; type?: 
   }
   
   return { requiresInteraction: false };
+}
+
+// Background task management
+const TASKS_DIR = '.t-pane/tasks';
+
+// Get tasks directory
+function getTasksDir(): string {
+  return path.join(getCurrentDirectory(), TASKS_DIR);
+}
+
+// Ensure tasks directory exists
+async function ensureTasksDir(): Promise<void> {
+  const tasksDir = getTasksDir();
+  await fs.mkdir(tasksDir, { recursive: true });
+}
+
+// Get task status file path
+function getTaskStatusFile(): string {
+  return path.join(getTasksDir(), 'status.json');
+}
+
+// Load task status
+async function loadTaskStatus(): Promise<BackgroundTask[]> {
+  try {
+    const statusFile = getTaskStatusFile();
+    const data = await fs.readFile(statusFile, 'utf-8');
+    return JSON.parse(data);
+  } catch (error) {
+    return [];
+  }
+}
+
+// Save task status
+async function saveTaskStatus(tasks: BackgroundTask[]): Promise<void> {
+  await ensureTasksDir();
+  const statusFile = getTaskStatusFile();
+  await fs.writeFile(statusFile, JSON.stringify(tasks, null, 2));
+}
+
+// Create CLAUDE.md for background task
+function createTaskClaudeMd(task: string, outputFile: string): string {
+  return `# Background Task Instructions
+
+## Your Task
+${task}
+
+## Output Requirements
+1. Save your findings/results to: ${outputFile}
+2. Use markdown format for the output
+3. Include a summary at the top
+4. Be thorough but concise
+5. When complete, save the file and exit
+
+## Important
+- This is a background task running independently
+- Focus only on the task provided
+- Do not make any code changes unless explicitly requested
+- Save your work to the specified file only
+`;
 }
 
 async function getPanes(): Promise<TmuxPane[]> {
@@ -507,6 +582,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ["text"]
       }
+    },
+    {
+      name: "launch_background_task",
+      description: "Launch a Claude instance in background to perform a research/analysis task",
+      inputSchema: {
+        type: "object",
+        properties: {
+          task: { type: "string", description: "The task description for Claude to execute" },
+          outputFile: { type: "string", description: "Filename for the output (will be saved in .t-pane/tasks/)" },
+          timeout: { type: "number", description: "Maximum time in milliseconds (default: 5 minutes)", default: 300000 }
+        },
+        required: ["task", "outputFile"]
+      }
+    },
+    {
+      name: "check_background_tasks",
+      description: "Check status of background tasks",
+      inputSchema: {
+        type: "object",
+        properties: {}
+      }
     }
   ],
 }));
@@ -617,6 +713,110 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: "text",
               text: `Text sent to pane${enter ? ' and executed' : ' (without Enter)'}: ${text}`
+            }
+          ]
+        };
+      }
+      
+      case "launch_background_task": {
+        const { task, outputFile, timeout } = launchBackgroundTaskSchema.parse(args);
+        
+        // Create task ID and metadata
+        const taskId = Date.now().toString() + Math.random().toString(36).substring(7);
+        const outputPath = path.join(getTasksDir(), outputFile);
+        
+        // Create a new pane for the background task
+        const paneName = `task-${taskId.substring(0, 8)}`;
+        const paneId = await findOrCreatePane(paneName);
+        
+        // Create task record
+        const newTask: BackgroundTask = {
+          id: taskId,
+          task,
+          outputFile,
+          status: 'pending',
+          startTime: new Date().toISOString(),
+          paneId
+        };
+        
+        // Load existing tasks and add new one
+        const tasks = await loadTaskStatus();
+        tasks.push(newTask);
+        await saveTaskStatus(tasks);
+        
+        // Create CLAUDE.md in tasks directory
+        const claudeMdPath = path.join(getTasksDir(), 'CLAUDE.md');
+        await fs.writeFile(claudeMdPath, createTaskClaudeMd(task, outputPath));
+        
+        // Create a simple command for the user to run Claude with the task
+        const claudePrompt = `echo "Task: ${task}" && echo "Output to: ${outputPath}" && echo "" && echo "Run: claude" && echo "Then ask Claude to complete the task and save to the output file"`;
+        await execAsync(`tmux send-keys -t ${paneId} ${JSON.stringify(claudePrompt)} Enter`);
+        
+        // Update task status to running
+        newTask.status = 'running';
+        await saveTaskStatus(tasks);
+        
+        // Set up a timeout to mark task as failed if it takes too long
+        setTimeout(async () => {
+          const currentTasks = await loadTaskStatus();
+          const taskIndex = currentTasks.findIndex(t => t.id === taskId);
+          if (taskIndex !== -1 && currentTasks[taskIndex].status === 'running') {
+            currentTasks[taskIndex].status = 'failed';
+            currentTasks[taskIndex].endTime = new Date().toISOString();
+            await saveTaskStatus(currentTasks);
+          }
+        }, timeout);
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Background task launched!\n\n` +
+                    `Task ID: ${taskId}\n` +
+                    `Pane: ${paneName}\n` +
+                    `Output will be saved to: ${outputPath}\n\n` +
+                    `Use check_background_tasks to monitor progress.`
+            }
+          ]
+        };
+      }
+      
+      case "check_background_tasks": {
+        const tasks = await loadTaskStatus();
+        
+        // Check output files to update status
+        for (const task of tasks) {
+          if (task.status === 'running') {
+            const outputPath = path.join(getTasksDir(), task.outputFile);
+            try {
+              await fs.access(outputPath);
+              // If file exists, mark as completed
+              task.status = 'completed';
+              task.endTime = new Date().toISOString();
+            } catch (error) {
+              // File doesn't exist yet, still running
+            }
+          }
+        }
+        
+        // Save updated status
+        await saveTaskStatus(tasks);
+        
+        // Format output
+        const taskSummary = tasks.map(task => {
+          const duration = task.endTime 
+            ? `${Math.round((new Date(task.endTime).getTime() - new Date(task.startTime).getTime()) / 1000)}s`
+            : 'running';
+          return `- [${task.status}] ${task.outputFile} (${duration})\n  Task: ${task.task}`;
+        }).join('\n\n');
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: tasks.length > 0 
+                ? `Background Tasks:\n\n${taskSummary}`
+                : "No background tasks found."
             }
           ]
         };
