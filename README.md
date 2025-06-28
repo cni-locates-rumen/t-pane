@@ -4,13 +4,13 @@ An MCP (Model Context Protocol) server that enables Claude to execute commands i
 
 ## Features
 
-- **Automatic Pane Management**: Creates a dedicated `claude-terminal` pane if it doesn't exist
+- **Directory-Aware Pane Management**: Creates separate panes for each directory/project
 - **Command Execution**: Run commands in tmux panes with captured output
 - **Smart Output Capture**: Uses unique markers to capture exactly the command output, regardless of buffer size
-- **Multiple Pane Support**: Can target different named panes
+- **Multiple Session Support**: Each Claude instance gets its own pane based on working directory
 - **Session Persistence**: Commands remain visible in tmux for user interaction
 - **Interactive Prompt Detection**: Automatically detects when commands require user input (passwords, confirmations, etc.)
-- **Command Logging**: Optional logging of all commands and outputs to `~/.t-pane/logs/`
+- **Directory-Specific Logging**: Commands are logged to `.t-pane/logs/` in the current directory
 
 ## Installation
 
@@ -96,9 +96,10 @@ list_panes()
    - Claude will inform you to switch to the tmux pane and provide input
 
 4. **Command Logging**: All commands and outputs are logged to:
-   - Location: `~/.t-pane/logs/commands-YYYY-MM-DD.jsonl`
+   - Primary location: `.t-pane/logs/` in the current working directory
+   - Fallback location: `~/.t-pane/logs/{directory-hash}/` if local directory is not writable
    - Format: JSON Lines (one JSON object per line)
-   - Includes: timestamp, command, output (truncated if >2KB), exit code, duration
+   - Includes: timestamp, command, output (truncated if >2KB), exit code, duration, directory
    - Disable with: `export T_PANE_DISABLE_LOGGING=true`
 
 5. **Efficiency**: This approach handles commands with any output size (even 100k+ lines) efficiently by:
@@ -109,10 +110,12 @@ list_panes()
 ## Example Session
 
 When Claude uses this server, you'll see:
-- A new tmux window/pane named `claude-terminal`
-- All commands Claude executes appear in this pane
+- A new tmux pane with directory-specific naming (e.g., `claude-t-pane` for the t-pane directory)
+- Each directory gets its own dedicated pane
+- Multiple Claude instances working in different directories won't interfere
+- All commands Claude executes appear in the appropriate pane
 - You can interact with the same terminal
-- Command history is preserved
+- Command history is preserved per directory
 
 ## Development
 
@@ -136,20 +139,28 @@ npm run build
 2. **"Not running inside a tmux session"**: Start tmux first with `tmux new-session`
 3. **Commands not appearing**: Check that the pane name matches what Claude is using
 
+## Directory-Aware Sessions
+
+The t-pane server creates separate tmux panes for each directory:
+- Pane names are based on the last 2 directory components (e.g., `claude-mcp-servers-t-pane`)
+- Each Claude instance working in a different directory gets its own pane
+- Logs are stored locally in each project directory
+- Multiple Claude instances can work simultaneously without interference
+
 ## Interactive Prompts
 
 When a command requires user input (like `git push` asking for credentials), the server will:
 1. Detect the interactive prompt
 2. Return a message to Claude indicating user interaction is needed
-3. You'll see a message like: "⚠️ User interaction required in tmux pane 'claude-terminal'"
-4. Switch to the tmux pane and provide the required input
+3. You'll see a message like: "⚠️ User interaction required in tmux pane"
+4. Switch to the appropriate tmux pane and provide the required input
 
 ## Command Logging
 
-By default, all commands are logged to `~/.t-pane/logs/` in JSON Lines format:
+By default, all commands are logged to `.t-pane/logs/` in the current directory:
 
 ```json
-{"timestamp":"2024-06-27T10:30:00Z","command":"git status","output":"...","exitCode":0,"duration":150}
+{"timestamp":"2024-06-27T10:30:00Z","command":"git status","output":"...","exitCode":0,"duration":150,"directory":"/path/to/project"}
 ```
 
 To disable logging:
