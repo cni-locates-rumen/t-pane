@@ -1,6 +1,6 @@
 {
   "name": "@mcp-servers/t-pane",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for tmux pane management and command execution",
   "license": "MIT",
   "type": "module",

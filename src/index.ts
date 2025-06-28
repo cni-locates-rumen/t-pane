@@ -10,6 +10,9 @@ import {
 import { z } from "zod";
 import { exec, execSync } from "child_process";
 import { promisify } from "util";
+import { promises as fs } from "fs";
+import * as path from "path";
+import * as os from "os";
 
 const execAsync = promisify(exec);
 
@@ -28,6 +31,19 @@ interface CommandExecution {
   output: string;
   exitCode: number;
   linesCaptuerd: number;
+  requiresInteraction?: boolean;
+  interactionType?: string;
+  interactionMessage?: string;
+}
+
+interface LogEntry {
+  timestamp: string;
+  command: string;
+  output: string;
+  exitCode: number;
+  duration: number;
+  requiresInteraction?: boolean;
+  interactionType?: string;
 }
 
 // Schemas
@@ -63,6 +79,73 @@ const server = new Server(
 // Utility functions
 // Store the created pane ID globally to reuse it
 let claudeTerminalPaneId: string | null = null;
+
+// Prompt detection patterns
+const PROMPT_PATTERNS = [
+  { pattern: /password\s*:/i, type: 'password', message: 'Password required' },
+  { pattern: /passphrase\s*:/i, type: 'password', message: 'Passphrase required' },
+  { pattern: /username\s*:/i, type: 'username', message: 'Username required' },
+  { pattern: /Username for/i, type: 'git-username', message: 'Git username required' },
+  { pattern: /Password for/i, type: 'git-password', message: 'Git password required' },
+  { pattern: /\[y\/N\]/i, type: 'yes-no', message: 'Yes/No confirmation required' },
+  { pattern: /\[Y\/n\]/i, type: 'yes-no', message: 'Yes/No confirmation required' },
+  { pattern: /\(y\/n\)/i, type: 'yes-no', message: 'Yes/No confirmation required' },
+  { pattern: /Continue\?/i, type: 'confirmation', message: 'Confirmation required' },
+  { pattern: /Are you sure/i, type: 'confirmation', message: 'Confirmation required' }
+];
+
+// Logging configuration
+const LOG_DIR = path.join(os.homedir(), '.t-pane', 'logs');
+const LOGGING_ENABLED = process.env.T_PANE_DISABLE_LOGGING !== 'true';
+
+// Ensure log directory exists
+async function ensureLogDir() {
+  if (LOGGING_ENABLED) {
+    try {
+      await fs.mkdir(LOG_DIR, { recursive: true });
+    } catch (error) {
+      console.error('Failed to create log directory:', error);
+    }
+  }
+}
+
+// Log command execution
+async function logCommand(entry: LogEntry) {
+  if (!LOGGING_ENABLED) return;
+  
+  try {
+    const date = new Date().toISOString().split('T')[0];
+    const logFile = path.join(LOG_DIR, `commands-${date}.jsonl`);
+    
+    // Truncate output if too large (keep first and last 1000 chars)
+    let logOutput = entry.output;
+    if (logOutput.length > 2000) {
+      logOutput = logOutput.substring(0, 1000) + '\n...truncated...\n' + logOutput.substring(logOutput.length - 1000);
+    }
+    
+    const logEntry = {
+      ...entry,
+      output: logOutput
+    };
+    
+    await fs.appendFile(logFile, JSON.stringify(logEntry) + '\n');
+  } catch (error) {
+    console.error('Failed to log command:', error);
+  }
+}
+
+// Check if output contains an interactive prompt
+function checkForPrompt(output: string): { requiresInteraction: boolean; type?: string; message?: string } {
+  const lastLines = output.split('\n').slice(-5).join('\n');
+  
+  for (const { pattern, type, message } of PROMPT_PATTERNS) {
+    if (pattern.test(lastLines)) {
+      return { requiresInteraction: true, type, message };
+    }
+  }
+  
+  return { requiresInteraction: false };
+}
 
 async function getPanes(): Promise<TmuxPane[]> {
   try {
@@ -144,6 +227,7 @@ async function findOrCreatePane(paneName: string = "claude-terminal"): Promise<s
 
 async function executeInPane(paneId: string, command: string, captureOutput: boolean = true): Promise<CommandExecution> {
   const commandId = Date.now().toString() + Math.random().toString(36).substring(7);
+  const startTime = Date.now();
   
   // Send the command
   await execAsync(`tmux send-keys -t ${paneId} ${JSON.stringify(command)} Enter`);
@@ -177,13 +261,31 @@ async function executeInPane(paneId: string, command: string, captureOutput: boo
         
         if (startLine <= endLine) {
           const output = lines.slice(startLine, endLine + 1).join('\n').trim();
-          return {
+          
+          // Check for interactive prompts
+          const promptCheck = checkForPrompt(paneContent);
+          
+          const result: CommandExecution = {
             commandId,
             command,
             output,
             exitCode: 0,
-            linesCaptuerd: output.split('\n').length
+            linesCaptuerd: output.split('\n').length,
+            ...promptCheck
           };
+          
+          // Log the command
+          await logCommand({
+            timestamp: new Date().toISOString(),
+            command,
+            output,
+            exitCode: 0,
+            duration: Date.now() - startTime,
+            requiresInteraction: promptCheck.requiresInteraction,
+            interactionType: promptCheck.type
+          });
+          
+          return result;
         }
       }
       
@@ -198,30 +300,76 @@ async function executeInPane(paneId: string, command: string, captureOutput: boo
         `tmux capture-pane -t ${paneId} -p -S - | sed -n '/===CMD_${commandId}_START===/,/===CMD_${commandId}_END===/p' | sed '1d;$d'`
       );
       
-      return {
+      // Check for prompts in the full pane content
+      const { stdout: fullContent } = await execAsync(`tmux capture-pane -t ${paneId} -p -S -`);
+      const promptCheck = checkForPrompt(fullContent);
+      
+      const result: CommandExecution = {
         commandId,
         command,
         output: markedOutput.trim(),
         exitCode: 0,
-        linesCaptuerd: markedOutput.trim().split('\n').length
+        linesCaptuerd: markedOutput.trim().split('\n').length,
+        ...promptCheck
       };
+      
+      // Log the command
+      await logCommand({
+        timestamp: new Date().toISOString(),
+        command,
+        output: markedOutput.trim(),
+        exitCode: 0,
+        duration: Date.now() - startTime,
+        requiresInteraction: promptCheck.requiresInteraction,
+        interactionType: promptCheck.type
+      });
+      
+      return result;
     } catch (error) {
-      return {
+      const errorResult: CommandExecution = {
         commandId,
         command,
         output: `Error capturing output: ${error}`,
         exitCode: -1,
         linesCaptuerd: 0
       };
+      
+      await logCommand({
+        timestamp: new Date().toISOString(),
+        command,
+        output: errorResult.output,
+        exitCode: -1,
+        duration: Date.now() - startTime
+      });
+      
+      return errorResult;
     }
   } else {
-    return {
+    // Even without capturing output, check for prompts after a short delay
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const { stdout: paneContent } = await execAsync(`tmux capture-pane -t ${paneId} -p -S -10`);
+    const promptCheck = checkForPrompt(paneContent);
+    
+    const result: CommandExecution = {
       commandId,
       command,
       output: "Command sent (output not captured)",
       exitCode: 0,
-      linesCaptuerd: 0
+      linesCaptuerd: 0,
+      ...promptCheck
     };
+    
+    await logCommand({
+      timestamp: new Date().toISOString(),
+      command,
+      output: "[output not captured]",
+      exitCode: 0,
+      duration: Date.now() - startTime,
+      requiresInteraction: promptCheck.requiresInteraction,
+      interactionType: promptCheck.type
+    });
+    
+    return result;
   }
 }
 
@@ -288,6 +436,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         
         // Execute the command
         const result = await executeInPane(paneId, command, captureOutput);
+        
+        // If interaction is required, format a special message
+        if (result.requiresInteraction) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `⚠️ User interaction required in tmux pane '${targetPane}'\n\n` +
+                      `${result.interactionMessage}\n\n` +
+                      `The command '${command}' is waiting for user input.\n` +
+                      `Please switch to the tmux pane and provide the required input.\n\n` +
+                      `Output so far:\n${result.output}`
+              }
+            ]
+          };
+        }
         
         return {
           content: [
@@ -360,6 +524,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 // Main function
 async function main() {
+  // Ensure log directory exists
+  await ensureLogDir();
+  
   // Check if tmux is available
   try {
     execSync("tmux -V");

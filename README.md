@@ -9,6 +9,8 @@ An MCP (Model Context Protocol) server that enables Claude to execute commands i
 - **Smart Output Capture**: Uses unique markers to capture exactly the command output, regardless of buffer size
 - **Multiple Pane Support**: Can target different named panes
 - **Session Persistence**: Commands remain visible in tmux for user interaction
+- **Interactive Prompt Detection**: Automatically detects when commands require user input (passwords, confirmations, etc.)
+- **Command Logging**: Optional logging of all commands and outputs to `~/.t-pane/logs/`
 
 ## Installation
 
@@ -88,7 +90,18 @@ list_panes()
    - Extracts only the output between markers
    - Returns clean output to Claude
 
-3. **Efficiency**: This approach handles commands with any output size (even 100k+ lines) efficiently by:
+3. **Interactive Prompt Detection**: When a command requires user input:
+   - Detects common prompt patterns (password, username, yes/no, etc.)
+   - Returns a special response alerting Claude that user interaction is needed
+   - Claude will inform you to switch to the tmux pane and provide input
+
+4. **Command Logging**: All commands and outputs are logged to:
+   - Location: `~/.t-pane/logs/commands-YYYY-MM-DD.jsonl`
+   - Format: JSON Lines (one JSON object per line)
+   - Includes: timestamp, command, output (truncated if >2KB), exit code, duration
+   - Disable with: `export T_PANE_DISABLE_LOGGING=true`
+
+5. **Efficiency**: This approach handles commands with any output size (even 100k+ lines) efficiently by:
    - Using unique IDs to avoid collision
    - Capturing from the end of the buffer
    - Only extracting the relevant portion
@@ -123,9 +136,31 @@ npm run build
 2. **"Not running inside a tmux session"**: Start tmux first with `tmux new-session`
 3. **Commands not appearing**: Check that the pane name matches what Claude is using
 
+## Interactive Prompts
+
+When a command requires user input (like `git push` asking for credentials), the server will:
+1. Detect the interactive prompt
+2. Return a message to Claude indicating user interaction is needed
+3. You'll see a message like: "⚠️ User interaction required in tmux pane 'claude-terminal'"
+4. Switch to the tmux pane and provide the required input
+
+## Command Logging
+
+By default, all commands are logged to `~/.t-pane/logs/` in JSON Lines format:
+
+```json
+{"timestamp":"2024-06-27T10:30:00Z","command":"git status","output":"...","exitCode":0,"duration":150}
+```
+
+To disable logging:
+```bash
+export T_PANE_DISABLE_LOGGING=true
+```
+
 ## Future Enhancements
 
+- [x] Interactive prompt detection
+- [x] Command logging
 - [ ] Support for multiple concurrent commands
 - [ ] Progress indicators for long-running commands
-- [ ] Command history tracking
 - [ ] Integration with `/resume` for session continuity
