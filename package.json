@@ -1,0 +1,27 @@
+{
+  "name": "@mcp-servers/t-pane",
+  "version": "0.1.0",
+  "description": "MCP server for tmux pane management and command execution",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "mcp-t-pane": "dist/index.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc && shx chmod +x dist/*.js",
+    "prepare": "npm run build",
+    "watch": "tsc --watch",
+    "dev": "node --loader ts-node/esm src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.2",
+    "shx": "^0.3.4",
+    "ts-node": "^10.9.2"
+  }
+}
