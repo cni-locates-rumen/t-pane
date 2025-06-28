@@ -64,6 +64,12 @@ const captureOutputSchema = z.object({
   lines: z.number().optional().default(100).describe("Number of lines to capture from the end")
 });
 
+const sendKeysSchema = z.object({
+  text: z.string().describe("Text to send to the pane"),
+  pane: z.string().optional().describe("Target pane (default: directory-specific pane)"),
+  enter: z.boolean().optional().default(false).describe("Whether to send Enter after the text")
+});
+
 // Server setup
 const server = new Server(
   {
@@ -488,6 +494,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: "object",
         properties: {}
       }
+    },
+    {
+      name: "send_keys",
+      description: "Send text/keys to a tmux pane (useful for pre-filling commands)",
+      inputSchema: {
+        type: "object",
+        properties: {
+          text: { type: "string", description: "Text to send to the pane" },
+          pane: { type: "string", description: "Target pane (default: directory-specific pane)" },
+          enter: { type: "boolean", description: "Whether to send Enter after the text", default: false }
+        },
+        required: ["text"]
+      }
     }
   ],
 }));
@@ -506,17 +525,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Execute the command
         const result = await executeInPane(paneId, command, captureOutput);
         
-        // If interaction is required, format a special message
+        // If interaction is required, format a special message and pre-fill the command
         if (result.requiresInteraction) {
+          // Pre-fill the command in the pane (without Enter)
+          try {
+            await execAsync(`tmux send-keys -t ${paneId} ${JSON.stringify(command)}`);
+          } catch (error) {
+            // Continue even if pre-fill fails
+          }
+          
           return {
             content: [
               {
                 type: "text",
                 text: `⚠️ User interaction required in tmux pane\n\n` +
                       `${result.interactionMessage}\n\n` +
-                      `The command is waiting for user input. You can:\n` +
-                      `1. Click this command to paste it: ${command}\n` +
-                      `2. Switch to the tmux pane to provide input\n\n` +
+                      `I've pre-filled the command for you (without pressing Enter).\n` +
+                      `Switch to the tmux pane to review and execute it.\n\n` +
+                      `Command waiting: ${command}\n\n` +
                       `Output so far:\n${result.output}`
               }
             ]
@@ -571,6 +597,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: "text",
               text: JSON.stringify(panes, null, 2)
+            }
+          ]
+        };
+      }
+      
+      case "send_keys": {
+        const { text, pane, enter } = sendKeysSchema.parse(args);
+        
+        // Find or create the pane
+        const paneId = await findOrCreatePane(pane);
+        
+        // Send the text
+        const enterKey = enter ? ' Enter' : '';
+        await execAsync(`tmux send-keys -t ${paneId} ${JSON.stringify(text)}${enterKey}`);
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Text sent to pane${enter ? ' and executed' : ' (without Enter)'}: ${text}`
             }
           ]
         };

@@ -77,6 +77,17 @@ Lists all available tmux panes.
 list_panes()
 ```
 
+### 5. Send Keys
+Send text to a tmux pane without executing it (useful for pre-filling commands).
+
+```typescript
+send_keys({
+  text: "git push origin main",
+  pane: "claude-terminal",  // optional, defaults to directory-specific pane
+  enter: false             // optional, set to true to also send Enter
+})
+```
+
 ## How It Works
 
 1. **Command Execution**: When Claude executes a command, it's wrapped with unique markers:
@@ -151,9 +162,10 @@ The t-pane server creates separate tmux panes for each directory:
 
 When a command requires user input (like `git push` asking for credentials), the server will:
 1. Detect the interactive prompt
-2. Return a message to Claude indicating user interaction is needed
-3. You'll see a message like: "⚠️ User interaction required in tmux pane"
-4. Switch to the appropriate tmux pane and provide the required input
+2. Pre-fill the command in the tmux pane (without pressing Enter)
+3. Return a message to Claude indicating user interaction is needed
+4. You'll see a message like: "⚠️ User interaction required in tmux pane"
+5. Switch to the tmux pane where the command is pre-filled and ready for you to review/execute
 
 ## Command Logging
 
