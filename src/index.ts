@@ -132,12 +132,15 @@ function getPaneName(directory?: string): string {
   // Use last 2-3 directory components for readability
   const suffix = pathParts.slice(-2).join('-').toLowerCase().replace(/[^a-z0-9-]/g, '');
   
+  // Add process ID or random suffix to ensure uniqueness
+  const uniqueId = process.pid ? process.pid.toString().slice(-4) : Math.random().toString(36).substring(2, 6);
+  
   // If suffix is too long or empty, use hash
   if (!suffix || suffix.length > 20) {
-    return `claude-${getDirectoryHash(dir)}`;
+    return `claude-${getDirectoryHash(dir)}-${uniqueId}`;
   }
   
-  return `claude-${suffix}`;
+  return `claude-${suffix}-${uniqueId}`;
 }
 
 // Prompt detection patterns

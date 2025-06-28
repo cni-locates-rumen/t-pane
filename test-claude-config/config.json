@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "t-pane": {
+      "command": "node",
+      "args": ["/Users/rumen.d/github/mcp-servers/t-pane/dist/index.js"]
+    }
+  }
+}
